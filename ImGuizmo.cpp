@@ -2081,6 +2081,23 @@ namespace IMGUIZMO_NAMESPACE
       return type;
    }
 
+   static void rebuildPlan(int type)
+   {
+      vec_t movePlanNormal[] = { gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
+         gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
+         -gContext.mCameraDir };
+
+      vec_t cameraToModelNormalized = Normalized(gContext.mModel.v.position - gContext.mCameraEye);
+      for (unsigned int i = 0; i < 3; i++)
+      {
+         vec_t orthoVector = Cross(movePlanNormal[i], cameraToModelNormalized);
+         movePlanNormal[i].Cross(orthoVector);
+         movePlanNormal[i].Normalize();
+      }
+      // pickup plan
+      gContext.mTranslationPlan = BuildPlan(gContext.mModel.v.position, movePlanNormal[type - MT_MOVE_X]);
+   }
+
    static bool HandleTranslation(float* matrix, float* deltaMatrix, OPERATION op, int& type, const float* snap)
    {
       if(!Intersects(op, TRANSLATE) || type != MT_NONE)
@@ -2099,6 +2116,8 @@ namespace IMGUIZMO_NAMESPACE
 #else
          ImGui::CaptureMouseFromApp();
 #endif
+         rebuildPlan(gContext.mCurrentOperation);
+
          const float signedLength = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
          const float len = fabsf(signedLength); // near plan
          const vec_t newPos = gContext.mRayOrigin + gContext.mRayVector * len;
@@ -2180,19 +2199,8 @@ namespace IMGUIZMO_NAMESPACE
             gContext.mbUsing = true;
             gContext.mEditingID = gContext.mActualID;
             gContext.mCurrentOperation = type;
-            vec_t movePlanNormal[] = { gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
-               gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
-               -gContext.mCameraDir };
+            rebuildPlan(type);
 
-            vec_t cameraToModelNormalized = Normalized(gContext.mModel.v.position - gContext.mCameraEye);
-            for (unsigned int i = 0; i < 3; i++)
-            {
-               vec_t orthoVector = Cross(movePlanNormal[i], cameraToModelNormalized);
-               movePlanNormal[i].Cross(orthoVector);
-               movePlanNormal[i].Normalize();
-            }
-            // pickup plan
-            gContext.mTranslationPlan = BuildPlan(gContext.mModel.v.position, movePlanNormal[type - MT_MOVE_X]);
             const float len = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
             gContext.mTranslationPlanOrigin = gContext.mRayOrigin + gContext.mRayVector * len;
             gContext.mMatrixOrigin = gContext.mModel.v.position;
