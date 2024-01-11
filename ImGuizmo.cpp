@@ -38,6 +38,8 @@
 #define _malloca(x) alloca(x)
 #define _freea(x)
 #endif
+#include <vector>
+#include <algorithm>
 
 // includes patches for multiview from
 // https://github.com/CedricGuillemet/ImGuizmo/issues/15
@@ -761,6 +763,9 @@ namespace IMGUIZMO_NAMESPACE
 
       bool mAllowAxisFlip = true;
       float mGizmoSizeClipSpace = 0.1f;
+
+      // RP specific
+      float mPlatformRadius = 100.f;
    };
 
    static Context gContext;
@@ -2081,21 +2086,53 @@ namespace IMGUIZMO_NAMESPACE
       return type;
    }
 
-   static void rebuildPlan(int type)
+   static vec_t ComputeCylinderBestPoint(const vec_t& rayOrigin, const vec_t& rayDir, float cylRadius, const vec_t& modelOrig)
    {
-      vec_t movePlanNormal[] = { gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
-         gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
-         -gContext.mCameraDir };
+      // Coefficients of the quadratic equation
+      float A = rayDir.x * rayDir.x + rayDir.y * rayDir.y;
+      float B = 2 * (rayOrigin.x * rayDir.x + rayOrigin.y * rayDir.y);
+      float C = rayOrigin.x * rayOrigin.x + rayOrigin.y * rayOrigin.y - cylRadius * cylRadius;
 
-      vec_t cameraToModelNormalized = Normalized(gContext.mModel.v.position - gContext.mCameraEye);
-      for (unsigned int i = 0; i < 3; i++)
+      // Discriminant
+      float D = B * B - 4 * A * C;
+
+      std::vector<vec_t> intersectionCandidates;
+      if (D > 0)
       {
-         vec_t orthoVector = Cross(movePlanNormal[i], cameraToModelNormalized);
-         movePlanNormal[i].Cross(orthoVector);
-         movePlanNormal[i].Normalize();
+         // Check if there are real solutions
+         float t1 = (-B + sqrtf(D)) / (2.f * A);
+         float t2 = (-B - sqrtf(D)) / (2.f * A);
+
+         vec_t p1 = rayOrigin + rayDir * t1;
+         intersectionCandidates.push_back(p1); // First intersection point
+
+         if (D > FLT_EPSILON)
+         {
+            vec_t p2 = rayOrigin + rayDir * t2;
+            intersectionCandidates.push_back(p2); // Second intersection point
+         }
       }
-      // pickup plan
-      gContext.mTranslationPlan = BuildPlan(gContext.mModel.v.position, movePlanNormal[type - MT_MOVE_X]);
+      else
+      {
+         vec_t pToPoint = {-rayOrigin.x, -rayOrigin.y};
+         float t = Dot(pToPoint, vec_t{ rayDir.x, rayDir.y, 0.f, 0.f }) / Dot(vec_t{ rayDir.x, rayDir.y, 0.f, 0.f }, vec_t{ rayDir.x, rayDir.y, 0.f, 0.f });
+         vec_t p = rayOrigin + rayDir * t;
+         intersectionCandidates.push_back(p);
+      }
+
+      if(intersectionCandidates.size() > 1)
+      {
+         assert(intersectionCandidates.size() == 2);
+         const auto& p1 = intersectionCandidates.front();
+         const auto& p2 = intersectionCandidates.back();
+         if((p1 - modelOrig).Length() > (p2 - modelOrig).Length() + FLT_EPSILON)
+            return p2;
+
+         return p1;
+      }
+
+      assert(!intersectionCandidates.empty());
+      return intersectionCandidates.front();
    }
 
    static bool HandleTranslation(float* matrix, float* deltaMatrix, OPERATION op, int& type, const float* snap)
@@ -2116,20 +2153,25 @@ namespace IMGUIZMO_NAMESPACE
 #else
          ImGui::CaptureMouseFromApp();
 #endif
-         rebuildPlan(gContext.mCurrentOperation);
-
-         const float signedLength = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
-         const float len = fabsf(signedLength); // near plan
-         const vec_t newPos = gContext.mRayOrigin + gContext.mRayVector * len;
+         const vec_t newPos = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, gContext.mPlatformRadius, gContext.mModel.v.position);
 
          // compute delta
-         const vec_t newOrigin = newPos - gContext.mRelativeOrigin * gContext.mScreenFactor;
+         vec_t newOrigin = newPos - gContext.mRelativeOrigin * gContext.mScreenFactor;
+         newOrigin.z = std::clamp(newOrigin.z, 0.f, 203.f);
          vec_t delta = newOrigin - gContext.mModel.v.position;
 
          // 1 axis constraint
-         if (gContext.mCurrentOperation >= MT_MOVE_X && gContext.mCurrentOperation <= MT_MOVE_Z)
+         if (gContext.mCurrentOperation >= MT_MOVE_X && gContext.mCurrentOperation <= MT_MOVE_Z
+            || gContext.mCurrentOperation == MT_MOVE_YZ || gContext.mCurrentOperation == MT_MOVE_ZX)
          {
-            const int axisIndex = gContext.mCurrentOperation - MT_MOVE_X;
+            int axisIndex;
+            if(gContext.mCurrentOperation == MT_MOVE_YZ)
+               axisIndex = 1;
+            else if(gContext.mCurrentOperation == MT_MOVE_ZX)
+               axisIndex = 0;
+            else
+               axisIndex = gContext.mCurrentOperation - MT_MOVE_X;
+
             const vec_t& axisValue = *(vec_t*)&gContext.mModel.m[axisIndex];
             const float lengthOnAxis = Dot(axisValue, delta);
             delta = axisValue * lengthOnAxis;
@@ -2199,13 +2241,11 @@ namespace IMGUIZMO_NAMESPACE
             gContext.mbUsing = true;
             gContext.mEditingID = gContext.mActualID;
             gContext.mCurrentOperation = type;
-            rebuildPlan(type);
 
-            const float len = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
-            gContext.mTranslationPlanOrigin = gContext.mRayOrigin + gContext.mRayVector * len;
+            const vec_t translationCylOrigin = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, 203.2f, gContext.mModel.v.position);
             gContext.mMatrixOrigin = gContext.mModel.v.position;
 
-            gContext.mRelativeOrigin = (gContext.mTranslationPlanOrigin - gContext.mModel.v.position) * (1.f / gContext.mScreenFactor);
+            gContext.mRelativeOrigin = (translationCylOrigin - gContext.mModel.v.position) * (1.f / gContext.mScreenFactor);
          }
       }
       return modified;
@@ -2508,6 +2548,11 @@ namespace IMGUIZMO_NAMESPACE
    void SetPlaneLimit(float value)
    {
      gContext.mPlaneLimit = value;
+   }
+
+   IMGUI_API void SetPlatformRadius(float value)
+   {
+      gContext.mPlatformRadius = value;
    }
 
    bool Manipulate(const float* view, const float* projection, OPERATION operation, MODE mode, float* matrix, float* deltaMatrix, const float* snap, const float* localBounds, const float* boundsSnap)
