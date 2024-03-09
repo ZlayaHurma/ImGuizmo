@@ -1614,7 +1614,7 @@ namespace IMGUIZMO_NAMESPACE
 
    static bool CanActivate()
    {
-      if (ImGui::IsMouseClicked(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive())
+      if (ImGui::IsMouseDown(0) && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive())
       {
          return true;
       }
@@ -2761,19 +2761,19 @@ namespace IMGUIZMO_NAMESPACE
       _freea(faces);
    }
 
-   void DrawGrid(const float* view, const float* projection, const float* matrix, const float gridSize)
+   void DrawGrid(const float* view, const float* projection, const float* matrix, const float gridSize, const float gridRectSize)
    {
       matrix_t viewProjection = *(matrix_t*)view * *(matrix_t*)projection;
       vec_t frustum[6];
       ComputeFrustumPlanes(frustum, viewProjection.m16);
       matrix_t res = *(matrix_t*)matrix * viewProjection;
 
-      for (float f = -gridSize; f <= gridSize; f += 1.f)
+      for (float f = -gridSize; f <= gridSize; f += gridRectSize)
       {
          for (int dir = 0; dir < 2; dir++)
          {
-            vec_t ptA = makeVect(dir ? -gridSize : f, 0.f, dir ? f : -gridSize);
-            vec_t ptB = makeVect(dir ? gridSize : f, 0.f, dir ? f : gridSize);
+            vec_t ptA = makeVect(dir ? -gridSize : f, dir ? f : -gridSize);
+            vec_t ptB = makeVect(dir ? gridSize : f, dir ? f : gridSize);
             bool visible = true;
             for (int i = 0; i < 6; i++)
             {
