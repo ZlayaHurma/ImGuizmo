@@ -2135,7 +2135,7 @@ namespace IMGUIZMO_NAMESPACE
       return intersectionCandidates.front();
    }
 
-   static bool HandleTranslation(float* matrix, float* deltaMatrix, OPERATION op, int& type, const float* snap)
+   static bool HandleTranslation(float* matrix, float* deltaMatrix, bool cylindricalMove, OPERATION op, int& type, const float* snap)
    {
       if(!Intersects(op, TRANSLATE) || type != MT_NONE)
       {
@@ -2153,11 +2153,24 @@ namespace IMGUIZMO_NAMESPACE
 #else
          ImGui::CaptureMouseFromApp();
 #endif
-         const vec_t newPos = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, gContext.mPlatformRadius, gContext.mModel.v.position);
+         vec_t newOrigin;
+         if(cylindricalMove)
+		 {
+            const vec_t newPos = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, gContext.mPlatformRadius, gContext.mModel.v.position);
 
-         // compute delta
-         vec_t newOrigin = newPos - gContext.mRelativeOrigin * gContext.mScreenFactor;
-         newOrigin.z = std::clamp(newOrigin.z, 0.f, 203.f);
+            // compute delta
+            newOrigin = newPos - gContext.mRelativeOrigin * gContext.mScreenFactor;
+         }
+         else
+         {
+            const float signedLength = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
+            const float len = fabsf(signedLength); // near plan
+            const vec_t newPos = gContext.mRayOrigin + gContext.mRayVector * len;
+
+            // compute delta
+            newOrigin = newPos - gContext.mRelativeOrigin * gContext.mScreenFactor;
+         }
+
          vec_t delta = newOrigin - gContext.mModel.v.position;
 
          // 1 axis constraint
@@ -2241,11 +2254,35 @@ namespace IMGUIZMO_NAMESPACE
             gContext.mbUsing = true;
             gContext.mEditingID = gContext.mActualID;
             gContext.mCurrentOperation = type;
+            if(cylindricalMove)
+		    {
+                const vec_t translationCylOrigin = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, 203.2f, gContext.mModel.v.position);
+                gContext.mMatrixOrigin = gContext.mModel.v.position;
+                gContext.mRelativeOrigin = (translationCylOrigin - gContext.mModel.v.position) * (1.f / gContext.mScreenFactor);
+            }
+            else
+            {
+               vec_t movePlanNormal[] = { gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
+               gContext.mModel.v.right, gContext.mModel.v.up, gContext.mModel.v.dir,
+                   -gContext.mCameraDir };
 
-            const vec_t translationCylOrigin = ComputeCylinderBestPoint(gContext.mRayOrigin, gContext.mRayVector, 203.2f, gContext.mModel.v.position);
-            gContext.mMatrixOrigin = gContext.mModel.v.position;
+               vec_t cameraToModelNormalized = Normalized(gContext.mModel.v.position - gContext.mCameraEye);
+               for (unsigned int i = 0; i < 3; i++)
+               {
+                  vec_t orthoVector = Cross(movePlanNormal[i], cameraToModelNormalized);
+                  movePlanNormal[i].Cross(orthoVector);
+                  movePlanNormal[i].Normalize();
+               }
+               // pickup plan
+               gContext.mTranslationPlan = BuildPlan(gContext.mModel.v.position, movePlanNormal[type - MT_MOVE_X]);
+               const float len = IntersectRayPlane(gContext.mRayOrigin, gContext.mRayVector, gContext.mTranslationPlan);
+               gContext.mTranslationPlanOrigin = gContext.mRayOrigin + gContext.mRayVector * len;
+               gContext.mMatrixOrigin = gContext.mModel.v.position;
 
-            gContext.mRelativeOrigin = (translationCylOrigin - gContext.mModel.v.position) * (1.f / gContext.mScreenFactor);
+               gContext.mRelativeOrigin = (gContext.mTranslationPlanOrigin - gContext.mModel.v.position) * (1.f / gContext.mScreenFactor);
+            }
+
+            
          }
       }
       return modified;
@@ -2555,7 +2592,7 @@ namespace IMGUIZMO_NAMESPACE
       gContext.mPlatformRadius = value;
    }
 
-   bool Manipulate(const float* view, const float* projection, OPERATION operation, MODE mode, float* matrix, float* deltaMatrix, const float* snap, const float* localBounds, const float* boundsSnap)
+   bool Manipulate(const float* view, const float* projection, OPERATION operation, MODE mode, bool cylindricalMove, float* matrix, float* deltaMatrix, const float* snap, const float* localBounds, const float* boundsSnap)
    {
       // Scale is always local or matrix will be skewed when applying world scale or oriented matrix
       ComputeContext(view, projection, matrix, (operation & SCALE) ? LOCAL : mode);
@@ -2581,7 +2618,7 @@ namespace IMGUIZMO_NAMESPACE
       {
          if (!gContext.mbUsingBounds)
          {
-            manipulated = HandleTranslation(matrix, deltaMatrix, operation, type, snap) ||
+            manipulated = HandleTranslation(matrix, deltaMatrix, cylindricalMove, operation, type, snap) ||
                           HandleScale(matrix, deltaMatrix, operation, type, snap) ||
                           HandleRotation(matrix, deltaMatrix, operation, type, snap);
          }
